@@ -371,15 +371,20 @@
       \PR{19212}, thanks to \I{Kevin Ushey}.
 
       \item \code{trace} with non-\code{NULL} \code{exit} replaced
-      rematched S4 method definition with non-rematched one that
+      rematched S4 method definitions with non-rematched ones that
       evaluated \code{exit} twice, first on \code{.local} exit and again
       on method exit.
+
+      \item When tracing rematched S4 methods, \code{trace} could insert
+      a call \code{trace(.local, tracer=, exit=, \dots)} with improper
+      \code{tracer} and \code{exit} components.  Thanks to Hao Wang for
+      the report (\PR{18707}).
     }
   }
 }
 
 
-\section{\Rlogo Changes in R 4.6.1 patched}{
+\section{\Rlogo Changes in R 4.6.2}{
   \subsection{Bug Fixes}{
     \itemize{
       \item In plain-text help (\code{Rd2txt}), paragraphs are again
