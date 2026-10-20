@@ -366,10 +366,6 @@
       inside a masked \code{viewport}. Thanks to \I{Trevor Davis}' patch
       proposal in \PR{19075}.
 
-      \item \code{strsplit(str, perl=TRUE, bytes=TRUE)} no longer accesses
-      invalid memory in case \code{str} is an invalid UTF-8 string, fixing
-      \PR{19212}, thanks to \I{Kevin Ushey}.
-
       \item \code{trace} with non-\code{NULL} \code{exit} replaced
       rematched S4 method definitions with non-rematched ones that
       evaluated \code{exit} twice, first on \code{.local} exit and again
@@ -379,6 +375,11 @@
       a call \code{trace(.local, tracer=, exit=, \dots)} with improper
       \code{tracer} and \code{exit} components.  Thanks to Hao Wang for
       the report (\PR{18707}).
+
+      \item Fixes for \code{grid.pack(row.after=)}
+      (and \code{row.before} and \code{col.after} and
+      \code{col.before}) and \code{grid.pack(dynamic=TRUE)}.
+      Thanks to \I{Athenkosi Nkonyeni} for reports.
     }
   }
 }
@@ -496,9 +497,18 @@
       with \code{dffits()}, \code{dfbetas()}, \code{covratio()}. \PR{19167} by
       \I{Amal Tawfik}.
 
+      \item If \code{wilcox.test(..., exact=TRUE)}'s p-value is close to
+      the 0 or 1 boundaries, the calculation no longer suffers severely
+      from cancellation, thanks to \I{Tasuku Kobayashi}'s reports and
+      \I{Ahmed Sattar Jabbar}'s suggestion in \PR{19144}.
+
       \item Long stringed error messages are now protected from premature
       garbage collection, fixing \PR{19210}, reported and analyzed by
       \I{Yuancheng Jiang}.
+
+      \item \code{strsplit(str, perl=TRUE, bytes=TRUE)} no longer accesses
+      invalid memory in case \code{str} is an invalid UTF-8 string, fixing
+      \PR{19212}, thanks to \I{Kevin Ushey}.
 
       \item \code{isoreg(numeric(0))} no longer returns unallocated component
       \code{yc}, fixing \PR{19224} thanks to \I{Kevin Ushey}.
@@ -569,11 +579,6 @@
       \item \code{wilcox.test(x, exact=FALSE, correct = k)}'s p-value
       computation got a missing \code{dnorm(z)} factor, and so did the
       2-sample case, in addition to more fixes.
-
-      Further, if \code{wilcox.test(.., exact=TRUE)}'s p-value is close to
-      the 0 or 1 boundaries, the calculation no longer suffers severely
-      from cancellation, thanks to \I{Tasuku Kobayashi}'s reports and
-      \I{Ahmed Sattar Jabbar}'s suggestion in \PR{19144}.
 
       \item The data part of \code{getGenerics()} listed package names for
       generic functions defined in more than one package.  Now it
