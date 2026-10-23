@@ -3839,6 +3839,22 @@ local({
 ## produced undefined behvaior
 
 
+## available.packages() "subarch" filter (only active in builds with a
+## sub-architecture, as on Windows), now checking distinct Archs entries once
+local({
+    f <- utils:::available_packages_filters_db$subarch
+    db <- cbind(Package = paste0("p", 1:6),
+                Archs = c(NA, "x64", "i386, x64", "i386", "x64", "i386,x64"))
+    r_arch <- .Platform$r_arch
+    keep <- if(!nzchar(r_arch)) 1:6
+            else if(r_arch == "x64") c(1, 2, 3, 5, 6)
+            else if(r_arch == "i386") c(1, 3, 4, 6)
+            else 1
+    stopifnot(identical(f(db), db[keep, , drop = FALSE]))
+})
+## same results as before, which took 15 times as long for CRAN on Windows
+
+
 ## parsing '<lhs> |> <var> => <expr>' left the reduced call unprotected on the
 ## parser stack, so a GC before the enclosing reduction could free it
 ## (found by fuzzing; '=>' is still opt-in, and stays enabled once seen)
@@ -3877,6 +3893,31 @@ for(obj in list(ss, ss$fit))
     for(d in list(NULL, -99L))
         assertErrV(predict(obj, x = 1, deriv = d))
 ## These could cause a segfault in R <= 4.6.1
+
+
+## tools:::.remove_stale_dups(), used by available.packages() and
+## write_PACKAGES(latestOnly = TRUE), now ordering all duplicates at once
+local({
+    db <- cbind(Package = c("a", "b", "a", "c", "a", "b", "c", "d", "d"),
+                Version = c("1.0", "0.9", "1.0-1", "2.0", "1.0-1", "0.10",
+                            "2.0.0", "1.0", "1.0"),
+                Repository = paste0("r", 1:9))
+    ## the highest version, and of equal ones the first
+    keep <- c(3, 4, 6, 8)
+    stopifnot(identical(tools:::.remove_stale_dups(db), db[keep, ]))
+    df <- as.data.frame(db)
+    stopifnot(identical(tools:::.remove_stale_dups(df), df[keep, ]))
+    ## more than 100 duplicates, many in the same version
+    n <- 150
+    db <- cbind(Package = rep(paste0("p", 1:n), 3),
+                Version = c(rep("1.0", n), rep(c("1.1", "0.9"), length.out = n),
+                            rep("1.0", n)),
+                Repository = rep(c("A", "B", "C"), each = n))
+    keep <- ifelse(1:n %% 2 == 1, n + 1:n, 1:n)
+    stopifnot(identical(tools:::.remove_stale_dups(db), db[sort(keep), ]),
+              identical(tools:::.remove_stale_dups(db[1:n, ]), db[1:n, ]))
+})
+## same results as before, which looped over the duplicated packages
 
 
 ## format(<utf8>, width = large) -- PR#19188
@@ -4092,6 +4133,86 @@ assertWarnV(bY <- besselY(1, -2e7 - c(0.5, 0.25)))
 stopifnot(is.nan(bY))
 ## segfaulted in R-devel since r90571
 
+
+## available.packages() "R_version" filter, now comparing each distinct R
+## dependency once
+local({
+    f <- utils:::available_packages_filters_db$R_version
+    db <- cbind(Package = paste0("p", 1:10),
+                Depends = c(NA, "R (>= 2.0)", "R (>= 999.0)", "methods, R(>=3.0)",
+                            "R (>= 2.0), R (< 3.0)", "Rcpp (>= 999.0)",
+                            "R\n    (>= 999.0)", "XR (>= 999.0)",
+                            paste0("R (== ", getRversion(), ")"),
+                            "R (>= 999.0), methods"))
+    stopifnot(identical(f(db), db[c(1, 2, 4, 6, 8, 9), ]),
+              identical(f(db[c(1, 6, 8), ]), db[c(1, 6, 8), ]))
+})
+## same results as before, which took 2-3 times as long for CRAN
+
+
+
+## unserialize() in ascii format stopped at end of input instead of padding
+x <- strrep("a", 100)
+s <- rawToChar(serialize(x, NULL, ascii = TRUE))
+tc <- textConnection(substr(s, 1, nchar(s) - 50)) # cut inside the string
+r <- tryCatch(unserialize(tc), error = identity); close(tc)
+stopifnot(inherits(r, "error"))
+## silently returned a string padded with EOF bytes in R <= 4.6.0
+
+
+
+## load() of a hand-crafted RDX2 file whose pairlist chain holds a
+## non-pairlist node
+local({
+    f <- tempfile()
+    ## version 2 header, then a LISTSXP node tagged with the symbol "x",
+    ## with CAR = NULL
+    node <- c(charToRaw("RDX2\nX\n"),
+              writeBin(c(2L, 0x00040500L, 0x00020300L, 0x402L, 1L, 0x40009L),
+                       raw(), endian = "big"),
+              writeBin(1L, raw(), endian = "big"), charToRaw("x"),
+              writeBin(0xfeL, raw(), endian = "big"))
+    ## CDR: an EXTPTRSXP (prot = NULL, tag = ref to "x")
+    writeBin(c(node, writeBin(c(0x16L, 0xfeL, 0x1ffL), raw(), endian = "big")),
+             f)
+    E1 <- tryCid(load(f, new.env()))
+    ## CDR: a new SYMSXP "y", whose value slot is R_UnboundValue
+    writeBin(c(node, writeBin(c(1L, 0x40009L, 1L), raw(), endian = "big"),
+               charToRaw("y")), f)
+    E2 <- tryCid(load(f, new.env()))
+    stopifnot(inherits(E1, "error"), inherits(E2, "error"))
+    if(englishMsgs)
+        stopifnot(grepl("not in pair list form", conditionMessage(E1)),
+                  grepl("not in pair list form", conditionMessage(E2)))
+    unlink(f)
+})
+## segfaulted (E1) or looped forever (E2) in R <= 4.6.1
+
+
+## 'delete.response' converted indices from integer to double
+## and replaced NULL components of 'specials' with logical(0L)
+t1 <- terms(y ~ offset(a) + x + f(w), specials = c("f", "g"))
+a0 <- attributes(t0 <- delete.response(t1))
+stopifnot(identical(a0$response, 0L),
+          is.integer(a0$offset),
+          identical(names(a0$specials), c("f", "g")),
+          is.integer(a0$specials$f),
+          is.null(a0$specials$g))
+
+
+## 'delete.response' did not modify optional attribute 'dataClasses'
+t1 <- terms(model.frame(y ~ x, data.frame(x = 0, y = 0)))
+a0 <- attributes(t0 <- delete.response(t1))
+stopifnot(identical(a0$predvars, quote(list(x))),
+          identical(a0$dataClasses, c(x = .MFclass(0))))
+
+
+## scan() stripping a UTF-8 BOM from a first field that fills its buffer
+if (l10n_info()[["UTF-8"]]) {
+    x <- paste0("\ufeff", strrep("a", 8186L)) # 8189 bytes: buffer size - 3
+    stopifnot(identical(scan(text = x, what = "", quiet = TRUE), strrep("a", 8186L)))
+}
+## read 3 bytes past the end of the field buffer in R <= 4.6.1
 
 
 ## keep at end
