@@ -4474,7 +4474,7 @@ stopifnot(identical(Fold, getMethod(gnm, sig))) # 'Fold' restored
 
 
 ## gsub() when the first replacement is longer than the initial buffer:
-## empty input, or a long match repeated by back-references
+## empty input, or a long match repeated by back-references -- PR#19273
 local({
     r <- strrep("b", 2000)
     for(perl in c(FALSE, TRUE))
@@ -4501,8 +4501,7 @@ stopifnot(exprs = {
 ## smooth(x) was identical to x and sS said "NOT changed", in R <= 4.6.2
 
 
-
-## corrupt .Random.seed must not be used as is
+## corrupt .Random.seed must not be used as is -- PR#19276
 rk <- RNGkind()
 msgs <- character()
 h <- function(w) { msgs <<- c(msgs, conditionMessage(w)); invokeRestart("muffleWarning") }
@@ -4528,11 +4527,62 @@ do.call(RNGkind, as.list(rk))
 ## read before the state array, called a NULL function pointer, and kept
 ## a degenerate L'Ecuyer-CMRG state in R <= 4.6.2
 
-
-## deriv() and deriv3() when 'function.arg' is a zero-length logical
+## deriv() and deriv3() when 'function.arg' is a zero-length logical -- PR#19285
 stopifnot(is.expression(deriv (~x^2, "x", logical(0))),
           is.expression(deriv3(~x^2, "x", logical(0))))
 ## segfaulted or returned a function, depending on the build, in R <= 4.6.2
+
+
+## rasterImage() with zero-length 'angle' or 'interpolate' -- PR#19284
+local({
+    r <- as.raster(matrix(0, 1, 1))
+    pdf(NULL); on.exit(dev.off())
+    plot.new()
+    for(E in list(tryCid(rasterImage(r, 0, 0, 1, 1, interpolate = NULL)),
+                  tryCid(rasterImage(r, 0, 0, 1, 1, interpolate = logical())),
+                  tryCid(rasterImage(r, 0, 0, 1, 1, angle = NULL)),
+                  tryCid(rasterImage(r, 0, 0, 1, 1, angle = numeric()))))
+        stopifnot(inherits(E, "error"))
+    if(englishMsgs)
+        stopifnot(grepl("invalid 'interpolate' argument",
+                        conditionMessage(tryCid(rasterImage(r, 0, 0, 1, 1,
+                                                            interpolate = NULL)))))
+})
+## divided by zero (SIGFPE on x86_64), or read out of bounds, in R <= 4.6.2
+
+## deparse() of a negative constant as the left operand of ^, [, [[ or $
+x <- -2
+e <- bquote(.(x)^2)
+stopifnot(identical(deparse(e), "(-2)^2"),
+          identical(eval(parse(text = deparse(e))[[1]]), eval(e)),
+          identical(deparse(call("^", -2L, 2)), "(-2L)^2"),
+          identical(deparse(call("[", -1, 1)), "(-1)[1]"),
+          ## unchanged: no parens where none are needed
+          identical(deparse(call("^", 2, -2)), "2^-2"),
+          identical(deparse(call("*", -1, 2)), "-1 * 2"),
+          identical(deparse(call("-", -1)), "--1"),
+          identical(deparse(call(":", -1, 2)), "-1:2"),
+          identical(deparse(call("^", NA_integer_, 2)), "NA_integer_^2"),
+          identical(deparse(call("^", NA_real_, 2)), "NA_real_^2"))
+## gave "-2^2", which re-parses as -(2^2), in R <= 4.6.2
+
+
+## format(<POSIXlt>, usetz = TRUE) appended the zone past the output buffer
+x <- as.POSIXlt("2024-01-15 12:30:00", tz = "Europe/London")
+f44 <- strrep("a", 2044)
+stopifnot(identical(nchar(format(x, f44, usetz = TRUE)), 2048L))
+tools::assertError(format(x, paste0(f44, "a"), usetz = TRUE))
+y <- as.POSIXlt("2024-01-15 12:30:00", tz = "UTC")
+y$zone <- strrep("Z", 5000)
+tools::assertError(format(y, "%Y", usetz = TRUE))
+## overflowed a stack buffer, typically aborting, in R <= 4.6.2
+
+## dev.set(1) returns the device it opens, as documented -- PR#19281
+op <- options(device = function(...) pdf(NULL))
+d <- dev.set(1L)
+stopifnot(identical(d, dev.cur()), names(d) == "pdf")
+dev.off(d); options(op)
+## returned c("null device" = 1L) in R <= 4.6.2
 
 
 ## keep at end
