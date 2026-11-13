@@ -122,6 +122,20 @@
       \item The X11 on-screen devices now supports history navigation
       through (customizable) key bindings.
 
+      \item \code{model.matrix.default()} now catches and names an
+      unsuitable factor before calling \code{contrasts<-} (\PR{19148}),
+      and no longer warns about unused elements of \code{contrasts.arg}
+      (\PR{18313}, obviating an all too common workaround using
+      \code{suppressWarnings}).
+
+      \item \code{as.vector} gains methods for classes \code{Date},
+      \code{POSIXct}, and \code{difftime} that call methods for
+      \code{as.list} or \code{as.character} when \code{mode="list"} or
+      \code{"character"}.  The method for class \code{POSIXlt} is
+      changed to do the same and for all other modes work via class
+      \code{POSIXct}, a corollary being that
+      \code{as.vector(., mode="double")} now works as
+      \code{as.double(.)} rather than signalling an error.
     }
   }
 
@@ -479,6 +493,9 @@
       \code{is.numeric(x)} is false, as e.g., for \code{"difftime"} objects
       \code{x}.  Rather, \code{str.default()} obeys its default or explicit
       \code{digits.d} argument, fixing \PR{19294}.
+
+      \item Fix for \code{contourLines()} and \code{contour()} with
+      negative z values (\PR{19279}).  Thanks to \I{Kevin Ushey}.
     }
   }
 }
