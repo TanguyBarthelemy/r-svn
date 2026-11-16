@@ -487,6 +487,30 @@
       a list rather than an environment for numeric \code{x} of length
       greater than one.  Now they signal an error.  Thanks to
       \I{Adam Berkeš} for the report (\PR{19306}).
+
+      \item \code{as(object, name)} signalled an error when
+      \code{class(object)[1]} was not formally defined and
+      \code{class(object)[-1]} contained \code{name}, never searching
+      for a method for \code{coerce} with signature
+      \code{c(from="ANY", to=name)}.  Now it searches and signals an
+      error only on failure.  Thanks to \I{Michael Chirico} for
+      the report (\PR{19023}).
+
+      \item The internal HTTP server (used by the dynamic help system)
+      removes dot segments (\code{/../} and \code{/./}) also when they
+      were percent-encoded and on Windows converts \code{\\} to the
+      \code{/} path separator.  Paths that include \code{\%00} are
+      rejected.
+
+      \item The internal HTTP server accepts request and header lines of
+      up to 16k bytes (previously 1k) so that requests with many cookies
+      no longer fail.  This matters since browsers also send cookies set
+      by any other web application running on \samp{localhost}, as
+      cookies are not specific to a port.
+
+      \item The internal HTTP server no longer decodes \samp{+} as a
+      space in the request path (only in the query string) and no
+      longer removes dot segments from the query string.
     }
   }
 }

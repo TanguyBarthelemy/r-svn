@@ -42,7 +42,7 @@
 
 /* size of the line buffer for each worker (request and header only)
  * requests that have longer headers will be rejected with 413 */
-#define LINE_BUF_SIZE 1024
+#define LINE_BUF_SIZE 16384
 
 /* maximum number of active workers (parallel connections)
  * when exceeded the server closes new connections */
@@ -392,14 +392,15 @@ static int send_http_response(httpd_conn_t *c, const char *text) {
     return send_response(c->sock, text, strlen(text));
 }
 
-/* decode URI in place (decoding never expands) */
-static void uri_decode(char *s)
+/* decode URI in place (decoding never expands)
+   returns non-zero if the input decodes to a NUL byte (which would silently
+   truncate the path) */
+static int uri_decode(char *s)
 {
+    int bad = 0;
     char *t = s;
     while (*s) {
-	if (*s == '+') { /* + -> SPC */
-	    *(t++) = ' '; s++;
-	} else if (*s == '%') {
+	if (*s == '%') { /* NOTE: '+' is literal in paths, only the query uses it for SPC */
 	    unsigned char ec = 0;
 	    s++;
 	    if (*s >= '0' && *s <= '9') ec |= ((unsigned char)(*s - '0')) << 4;
@@ -410,10 +411,12 @@ static void uri_decode(char *s)
 	    else if (*s >= 'a' && *s <= 'f') ec |= (unsigned char)(*s - 'a' + 10);
 	    else if (*s >= 'A' && *s <= 'F') ec |= (unsigned char)(*s - 'A' + 10);
 	    if (*s) s++;
+	    if (!ec) bad = 1;
 	    *(t++) = (char) ec;
 	} else *(t++) = *(s++);
     }
     *t = 0;
+    return bad;
 }
 
 /* parse a query string into a named character vector - must NOT be
@@ -560,6 +563,8 @@ static SEXP handler_for_path(const char *path) {
     return install("httpd");
 }
 
+static char *remove_dot_segments(char *p);
+
 /* process a request by calling the httpd() function in R */
 static void process_request_(void *ptr)
 {
@@ -579,7 +584,25 @@ static void process_request_(void *ptr)
 	*(s++) = 0;
 	query = s;
     }
-    uri_decode(c->url); /* decode the path part */
+    if (uri_decode(c->url)) { /* decode the path part */
+	send_http_response(c, " 400 Bad Request (invalid path encoding)\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
+	c->attr |= CONNECTION_CLOSE;
+	vmaxset(vmax);
+	return;
+    }
+#ifdef _WIN32
+    /* '\\' is a path separator on Windows */
+    for (s = c->url; *s; s++)
+	if (*s == '\\') *s = '/';
+#endif
+    /* remove dot segments again, now from the decoded path, since encoded
+       dots ("%2e%2e") and separators ("%2f") are only visible after
+       decoding */
+    s = remove_dot_segments(c->url);
+    /* copy back since query points into c->url; the result is never
+       longer than the input, so it fits */
+    strcpy(c->url, s);
+    free(s);
     {   /* construct "try(httpd(url, query, body), silent=TRUE)" */
 	SEXP sTrue = PROTECT(ScalarLogical(TRUE));
 	SEXP sBody = PROTECT(parse_request_body(c));
@@ -1022,7 +1045,23 @@ static void worker_input_handler(void *data) {
 			}
 			url++;
 			bol[strlen(bol) - 9] = 0; /* cut off " HTTP/1.x" */
-			c->url = remove_dot_segments(url);
+			{   /* remove dot segments from the path, but not from the query */
+			    char *q = strchr(url, '?');
+			    if (q) *q = 0;
+			    c->url = remove_dot_segments(url);
+			    if (q) {
+				size_t pl = strlen(c->url);
+				char *u;
+				*q = '?';
+				if (!(u = (char*) realloc(c->url, pl + strlen(q) + 1))) {
+				    send_http_response(c, " 500 Out of memory\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
+				    remove_worker(c);
+				    return;
+				}
+				strcpy(u + pl, q);
+				c->url = u;
+			    }
+			}
 			if (!strncmp(bol + rll - 3, "1.0", 3)) c->attr |= HTTP_1_0;
 			if (!strncmp(bol, "GET ", 4)) c->method = METHOD_GET;
 			if (!strncmp(bol, "POST ", 5)) c->method = METHOD_POST;
