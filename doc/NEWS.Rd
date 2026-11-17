@@ -496,11 +496,11 @@
       error only on failure.  Thanks to \I{Michael Chirico} for
       the report (\PR{19023}).
 
-      \item The internal HTTP server (used by the dynamic help system)
-      removes dot segments (\code{/../} and \code{/./}) also when they
-      were percent-encoded and on Windows converts \code{\\} to the
-      \code{/} path separator.  Paths that include \code{\%00} are
-      rejected.
+      \item \code{cacheMetaData(attach = FALSE)} uncached S4 generic
+      functions before S4 methods, causing error on unload for packages
+      defining methods for a \emph{group} generic function, when the
+      package defining the group generic function was not attached.
+      Thanks to \I{Michael Chirico} for the report (\PR{19079}).
 
       \item The internal HTTP server accepts request and header lines of
       up to 16k bytes (previously 1k) so that requests with many cookies
@@ -511,6 +511,24 @@
       \item The internal HTTP server no longer decodes \samp{+} as a
       space in the request path (only in the query string) and no
       longer removes dot segments from the query string.
+
+      \item The internal HTTP server now handles line endings split
+      across network packets, responds with an error instead of
+      waiting when a request or header line is too long, no longer
+      corrupts request headers over 1k bytes in total and drops
+      requests that were closed by the client before they were
+      complete.
+
+      \item The internal HTTP server now sends 1xx, 204 and 304
+      responses without a body (as required by RFC 9110), skips empty
+      response headers and responds with an error when a handler
+      returns an invalid status code.
+
+      \item The internal HTTP server now rejects requests with ambiguous
+      framing (as required by RFC 9112): \code{Transfer-Encoding} (not
+      supported), invalid or conflicting \code{Content-Length},
+      whitespace before the colon in a header field and more than one
+      \code{Host} header.  Previously such requests could be misread.
     }
   }
 }
@@ -558,6 +576,15 @@
       \item \code{runmed(<has_NA_not_at_pos_1>, na.action = "na.omit")} no
       longer returns a \dQuote{random} smoothed value before the \code{NA},
       fixing \PR{19300}, from the report and patch by \I{Adam Berkeš}.
+
+      \item \code{bessel[IJKY](., nu = <large>)} no longer allocate memory
+      in cases we know the current algorithm will give \code{NaN} with a
+      warning anyway, thanks to \I{Jeroen Ooms}'s \PR{19326}.
+
+      \item The internal HTTP server removes dot segments (\code{/../}
+      and \code{/./}) also when they were percent-encoded.  On Windows,
+      converts \code{\\} to the \code{/} path separator.  Paths that
+      include \code{\%00} are rejected.
     }
   }
 }

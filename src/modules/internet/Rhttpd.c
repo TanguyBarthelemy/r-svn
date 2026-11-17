@@ -148,6 +148,8 @@ static struct sockaddr *build_sin(struct sockaddr_in *sa, const char *ip, int po
 #define THREAD_DISPOSE    0x20 /* the thread should dispose of the worker */
 #define CONTENT_TYPE      0x40 /* message has a specific content type set */
 #define CONTENT_FORM_UENC 0x80 /* message content type is application/x-www-form-urlencoded */
+#define BAD_LENGTH        0x100 /* conflicting or malformed Content-Length: */
+#define TRANSFER_ENCODING 0x200 /* Transfer-Encoding: was specified (unsupported) */
 
 struct buffer {
     struct buffer *next, *prev;
@@ -185,7 +187,8 @@ typedef struct httpd_conn {
     char *content_type;            /* content type (if set) */
     size_t line_pos, body_pos; /* positions in the buffers */
     long content_length;           /* desired content length */
-    char part, method, attr;       /* request part, method and connection attributes */
+    char part, method;             /* request part and method */
+    int attr;                      /* connection attributes */
     struct buffer *headers;        /* buffer holding header lines */
 } httpd_conn_t;
 
@@ -678,6 +681,15 @@ static void process_request_(void *ptr)
 			code = asInteger(VECTOR_ELT(x, 3));
 		}
 	    }
+	    /* the status code must have three digits and only 1xx-5xx are
+	       defined (RFC 9110, 15), anything else (incl. NA) is an invalid response */
+	    if (code < 100 || code > 599) {
+		UNPROTECT(7);
+		send_http_response(c, " 500 Invalid status code from R\r\nConnection: close\r\nContent-type: text/plain\r\n\r\nServer error: invalid status code in the response from R\r\n");
+		c->attr |= CONNECTION_CLOSE; /* force close */
+		vmaxset(vmax);
+		return;
+	    }
 	    y = VECTOR_ELT(x, 0);
 	    if (TYPEOF(y) == STRSXP && LENGTH(y) > 0) {
 		char buf[64];
@@ -694,9 +706,19 @@ static void process_request_(void *ptr)
 		    unsigned int i = 0, n = LENGTH(sHeaders);
 		    for (; i < n; i++) {
 			const char *hs = translateCharUTF8(STRING_ELT(sHeaders, i));
+			if (!*hs) continue; /* an empty line would end the header */
 			send_response(c->sock, "\r\n", 2);
 			send_response(c->sock, hs, strlen(hs));
 		    }
+		}
+		/* 1xx, 204 and 304 responses can NOT have a body nor Content-Length
+		   (RFC 9110, 8.6 and RFC 9112, 6.3) - any payload is ignored */
+		if (code < 200 || code == 204 || code == 304) {
+		    send_response(c->sock, "\r\n\r\n", 4);
+		    UNPROTECT(7);
+		    fin_request(c);
+		    vmaxset(vmax);
+		    return;
 		}
 		/* special content - a file: either list(file="") or list(c("*FILE*", "")) - the latter will go away */
 		if (TYPEOF(xNames) == STRSXP && LENGTH(xNames) > 0 &&
@@ -776,9 +798,18 @@ static void process_request_(void *ptr)
 		    unsigned int i = 0, n = LENGTH(sHeaders);
 		    for (; i < n; i++) {
 			const char *hs = translateCharUTF8(STRING_ELT(sHeaders, i));
+			if (!*hs) continue; /* an empty line would end the header */
 			send_response(c->sock, "\r\n", 2);
 			send_response(c->sock, hs, strlen(hs));
 		    }
+		}
+		/* no body nor Content-Length in 1xx, 204 and 304 (see above) */
+		if (code < 200 || code == 204 || code == 304) {
+		    send_response(c->sock, "\r\n\r\n", 4);
+		    UNPROTECT(7);
+		    fin_request(c);
+		    vmaxset(vmax);
+		    return;
 		}
 		snprintf(buf, 64, "\r\nContent-length: %u\r\n\r\n", LENGTH(y));
 		send_response(c->sock, buf, strlen(buf));
@@ -946,8 +977,7 @@ static void worker_input_handler(void *data) {
 	    remove_worker(c);
 	    return;
 	}
-	if (n == 0) { /* connection closed -> try to process and then remove */
-	    process_request(c);
+	if (n == 0) { /* connection closed before the request was complete - drop it */
 	    remove_worker(c);
 	    return;
 	}
@@ -961,6 +991,16 @@ static void worker_input_handler(void *data) {
 		DBG(printf(" end of request, moving to body\n"));
 		if (!(c->attr & HTTP_1_0) && !(c->attr & HOST_HEADER)) { /* HTTP/1.1 mandates Host: header */
 		    send_http_response(c, " 400 Bad Request (Host: missing)\r\nConnection: close\r\n\r\n");
+		    remove_worker(c);
+		    return;
+		}
+		if (c->attr & TRANSFER_ENCODING) { /* we cannot decode chunked bodies, so do not misread them as new requests */
+		    send_http_response(c, " 501 Not Implemented (Transfer-Encoding)\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
+		    remove_worker(c);
+		    return;
+		}
+		if (c->attr & BAD_LENGTH) {
+		    send_http_response(c, " 400 Bad Request (invalid Content-Length)\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
 		    remove_worker(c);
 		    return;
 		}
@@ -1017,9 +1057,10 @@ static void worker_input_handler(void *data) {
 	    {
 		char *bol = s;
 		while (*s && *s != '\r' && *s != '\n') s++;
-		if (!*s) { /* incomplete line */
+		/* a trailing CR may be the first half of CRLF: wait for more data */
+		if (!*s || (*s == '\r' && !s[1])) { /* incomplete line */
 		    if (bol == c->line_buf) {
-			if (c->line_pos < LINE_BUF_SIZE) /* one, incomplete line, but the buffer is not full yet, just return */
+			if (c->line_pos < LINE_BUF_SIZE - 1) /* one, incomplete line, but the buffer is not full yet (one byte is reserved for the NUL), just return */
 			    return;
 			/* the buffer is full yet the line is incomplete - we're in trouble */
 			send_http_response(c, " 413 Request entity too large\r\nConnection: close\r\n\r\n");
@@ -1072,6 +1113,11 @@ static void worker_input_handler(void *data) {
 			    /* we generate a header with the method so it can be passed to the handler */
 			    if (!c->headers)
 				c->headers = alloc_buffer(1024, NULL);
+			    if (!c->headers) {
+				send_http_response(c, " 500 Out of memory\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
+				remove_worker(c);
+				return;
+			    }
 			    /* make sure it fits */
 			    if (c->headers->size - c->headers->length >= 18 + (mend - bol)) {
 				if (!c->method) c->method = METHOD_OTHER;
@@ -1096,17 +1142,32 @@ static void worker_input_handler(void *data) {
 			char *k = bol;
 			if (!c->headers)
 			    c->headers = alloc_buffer(1024, NULL);
-			if (c->headers) { /* record the header line in the buffer */
+			if (!c->headers) {
+			    send_http_response(c, " 500 Out of memory\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
+			    remove_worker(c);
+			    return;
+			}
+			{ /* record the header line in the buffer */
 			    size_t l = strlen(bol);
 			    if (l) { /* this should be really always true */
 				if (c->headers->length + l + 1 > c->headers->size) { /* not enough space? */
 				    size_t fits = c->headers->size - c->headers->length;
-				    if (fits) memcpy(c->headers->data + c->headers->length, bol, fits);
-				    if (alloc_buffer(2048, c->headers)) {
+				    size_t needs = 2048; /* base suggestion, will double until adequate later */
+				    if (fits) {
+					memcpy(c->headers->data + c->headers->length, bol, fits);
+					c->headers->length += fits;
+				    }
+				    /* grow until fits, it is implicitly bounded by LINE_BUF_SIZE */
+				    while (l + 1 - fits >= needs) needs <<= 1;
+				    if (alloc_buffer(needs, c->headers)) {
 					c->headers = c->headers->next;
 					if (l - fits) memcpy(c->headers->data, bol + fits, l - fits);
 					c->headers->length = l - fits;
 					c->headers->data[c->headers->length++] = '\n';
+				    } else { /* the header would be incomplete */
+					send_http_response(c, " 500 Out of memory\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
+					remove_worker(c);
+					return;
 				    }
 				} else {
 				    memcpy(c->headers->data + c->headers->length, bol, l);
@@ -1115,19 +1176,40 @@ static void worker_input_handler(void *data) {
 				}
 			    }
 			}
-			while (*k && *k != ':') {
-			    if (*k >= 'A' && *k <= 'Z')
-				*k |= 0x20;
-			    k++;
+			{
+			    int ws = 0;
+			    while (*k && *k != ':') {
+				if (*k >= 'A' && *k <= 'Z')
+				    *k |= 0x20;
+				else if (*k == ' ' || *k == '\t')
+				    ws = 1;
+				k++;
+			    }
+			    /* whitespace in the field name (incl. before the colon) must be rejected,
+			       otherwise e.g. "Content-Length : n" would be ignored and the body misread
+			       as the next request */
+			    if (ws && *k == ':') {
+				send_http_response(c, " 400 Bad Request (invalid header)\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
+				remove_worker(c);
+				return;
+			    }
 			}
 			if (*k == ':') {
 			    *(k++) = 0;
 			    while (*k == ' ' || *k == '\t') k++;
 			    DBG(printf("header '%s' => '%s'\n", bol, k));
 			    if (!strcmp(bol, "content-length")) {
+				char *ep;
+				long cl = strtol(k, &ep, 10);
+				while (*ep == ' ' || *ep == '\t') ep++;
+				/* the value must be a number and a repeated header must agree */
+				if (ep == k || *ep || ((c->attr & CONTENT_LENGTH) && cl != c->content_length))
+				    c->attr |= BAD_LENGTH;
 				c->attr |= CONTENT_LENGTH;
-				c->content_length = atol(k);
+				c->content_length = cl;
 			    }
+			    if (!strcmp(bol, "transfer-encoding"))
+				c->attr |= TRANSFER_ENCODING;
 			    if (!strcmp(bol, "content-type")) {
 				char *l = k;
 				/* convert content-type to lowercase to facilitate comparison
@@ -1141,8 +1223,14 @@ static void worker_input_handler(void *data) {
 				if (!strncmp(k, "application/x-www-form-urlencoded", 33))
 				    c->attr |= CONTENT_FORM_UENC;
 			    }
-			    if (!strcmp(bol, "host"))
+			    if (!strcmp(bol, "host")) {
+				if (c->attr & HOST_HEADER) { /* more than one Host: is invalid */
+				    send_http_response(c, " 400 Bad Request (multiple Host:)\r\nConnection: close\r\nContent-length: 0\r\n\r\n");
+				    remove_worker(c);
+				    return;
+				}
 				c->attr |= HOST_HEADER;
+			    }
 			    if (!strcmp(bol, "connection")) {
 				char *l = k;
 				while (*l) { if (*l >= 'A' && *l <= 'Z') *l |= 0x20; l++; }
@@ -1173,9 +1261,8 @@ static void worker_input_handler(void *data) {
 		remove_worker(c);
 		return;
 	    }
-	    if (n == 0) { /* connection closed -> try to process and then remove */
-		process_request(c);
-	    remove_worker(c);
+	    if (n == 0) { /* connection closed before the body was complete - drop it */
+		remove_worker(c);
 		return;
 	    }
 	    c->body_pos += n;
@@ -1242,8 +1329,7 @@ static void worker_input_handler(void *data) {
 	    remove_worker(c);
 	    return;
 	}
-	if (n == 0) { /* connection closed -> try to process and then remove */
-	    process_request(c);
+	if (n == 0) { /* connection closed before the request was complete - drop it */
 	    remove_worker(c);
 	    return;
 	}
