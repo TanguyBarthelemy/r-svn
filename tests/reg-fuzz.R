@@ -7,6 +7,25 @@ tryCid <- function(expr) tryCatch(expr, error = identity)
 assertErrV  <- function(...) tools::assertError  (..., verbose=TRUE)
 assertWarnV <- function(...) tools::assertWarning(..., verbose=TRUE)
 
+onWindows <- .Platform$OS.type == "windows"
+onUnix    <- .Platform$OS.type == "unix"
+englishMsgs <- {
+    ## 1. LANGUAGE takes precedence over locale settings:
+    if(nzchar(lang <- Sys.getenv("LANGUAGE")))
+        lang == "en"
+    else { ## 2. Query the  locale
+        if(!onWindows) {
+            ## sub() :
+            lc.msgs <- sub("\\..*", "", print(Sys.getlocale("LC_MESSAGES")))
+            lc.msgs == "C" || substr(lc.msgs, 1,2) == "en"
+        } else { ## Windows
+            lc.type <- sub("\\..*", "", sub("_.*", "", print(Sys.getlocale("LC_CTYPE"))))
+            lc.type == "English" || lc.type == "C"
+        }
+    }
+}
+cat(sprintf("English messages: %s\n", englishMsgs))
+
 ### First dozen entries moved from ./tests-reg-tests-1e.R ----------------------
 
 ## malformed ALTREP serialized class metadata -- PR#19047
@@ -201,6 +220,58 @@ local({
 })
 ## read freed memory (visible under ASan or valgrind) in R <= 4.6.2
 
+
+## gregexpr() with strings that cannot be converted to wide characters -- PR#19301
+local({
+    n <- 30000 # 2n exceeds the default protect stack size
+    x <- c(rep(rawToChar(as.raw(0xff)), n), intToUtf8(252))
+    ## invalid UTF-8 fails conversion in any locale; the native "\xff"
+    ## converts to U+007F in the C locale on Windows
+    Encoding(x) <- "UTF-8"
+    r <- suppressWarnings(gregexpr(".", x))
+    stopifnot(identical(vapply(r, `[`, 0L, 1L), c(rep(-1L, n), 1L)))
+})
+## leaked two protect stack entries per such string, so this gave
+## "protection stack overflow", in R <= 4.6.2
+
+
+## readChar() on a raw vector holding 6-byte UTF-8 lead bytes
+if (l10n_info()[["UTF-8"]]) {
+    s <- readChar(as.raw(rep(0xff, 6 * 64)), 64L)
+    invisible(gc())
+    stopifnot(identical(nchar(s, "bytes"), 384L))
+}
+## wrote past its buffer where MB_CUR_MAX is 4 (macOS), seg.faulting, in R <= 4.6.2
+
+
+## gc() accounting after releasing a long string that carries a hash value -- PR#19195
+local({
+    used <- function() gc()["Vcells", "used"]
+    v0 <- used()
+    errs <- lapply(1:8, function(i)
+        tryCid(as.name(paste0(strrep("a", 20000), i))))
+    stopifnot(vapply(errs, inherits, NA, what = "error"),
+              abs(used() - v0) < 1e6)
+})
+## each rejected name was released as if its length were its hash value, so
+## 'used' wrapped around and the vector heap limit stopped applying, in R <= 4.6.2
+
+
+
+## 'next' as a call argument in a byte-compiled while()/repeat loop jumps back
+## by longjmp, which skipped every check for interrupts and time limits
+local({
+    f <- compiler::cmpfun(function() {
+        i <- 0L
+        while((i <- i + 1L) <= 1e8L) invisible(next)
+    })
+    setTimeLimit(elapsed = 0.5, transient = TRUE)
+    E <- tryCid(f())
+    stopifnot(inherits(E, "error"))
+    if(englishMsgs)
+        stopifnot(grepl("elapsed time limit", conditionMessage(E)))
+})
+## ran all 1e8 iterations without checking in R <= 4.6.2
 
 
 

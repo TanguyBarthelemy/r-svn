@@ -4520,6 +4520,27 @@ stopifnot(identical(y, x), identical(y0, y), identical(y1, unclass(y)))
 ## in R <= 4.6.2
 
 
+## getNamespace{Name,Version}()
+(toolsNV <- c(getNamespaceName("tools"), getNamespaceVersion("tools")))
+stopifnot(is.null(names(toolsNV)), length(toolsNV) == 2L, toolsNV[[1]] == "tools")
+## no longer carry (uninformative) names() in R > 4.6.*
+
+
+## an error after saveToConn() opened its connection itself -- PR#19336
+saveToConnObj <- 1
+f <- function(con) {
+    .Internal(saveToConn("saveToConnObj", con, FALSE, NULL, globalenv(), TRUE))
+    stop("after saveToConn")
+}
+for (i in 1:3) {
+    tf <- tempfile(fileext = ".rda")
+    stopifnot(identical(tryCatch(f(file(tf)), error = conditionMessage),
+                        "after saveToConn"))
+    unlink(tf)
+}
+rm(saveToConnObj)
+## segfaulted in R <= 4.6.*
+
 
 
 ## keep at end
