@@ -4491,6 +4491,21 @@ stopifnot(length(cl) == 1L,
 tools::assertWarning(contourLines(matrix(-1, 3, 3)), verbose = TRUE)
 
 
+## toupper(), encodeString() and strsplit(perl = TRUE) on long strings -- PR#19338
+x <- intToUtf8(rep(0xe9, 2e5)) # marked UTF-8 in any locale
+system.time(toupper(x))      # 1 s or so in R 4.6.2
+system.time(encodeString(x)) # ditto
+y <- strrep("a,", 2e5)
+system.time(sy <- strsplit(y, ",", perl = TRUE)) # ditto
+##  0.003 or so after fixing; were quadratic in the number of characters or pieces
+stopifnot(identical(sy, strsplit(y, ",", fixed = TRUE)))
+for (b in list(0xc3, c(0xe2, 0x82), c(0xf0, 0x9f, 0x98))) { # truncated: still invalid
+    s <- rawToChar(as.raw(c(0x61, b)))
+    Encoding(s) <- "UTF-8"
+    assertErrV(toupper(s))
+}
+
+
 ## as.environment(x), pos.to.env(x) for numeric 'x' (PR#19306)
 x <- c(-1L, -1L) # length(x) >= 2
 tools::assertError(as.environment(x)) # returned list
@@ -4505,6 +4520,18 @@ msg <- tryCmsg(socketSelect(list(s), timeout = 0))
 close(s)
 stopifnot(is.character(msg), !englishMsgs || grepl("not open", msg))
 ## used an uninitialized file descriptor, possibly segfaulting, in R <= 4.6.2
+
+
+## Serializing a wrapper around an ALTREP object incremented the wrapped
+## object's reference count for good, so after its data had been
+## accessed, later access signalled "REFCNT on locked WRAPPER data"
+x <- rnorm(100)
+y <- .Internal(wrap_meta(.Internal(wrap_meta(x, 0L, FALSE)), 0L, FALSE))
+s <- sum(y)
+z <- unserialize(serialize(y, NULL))
+stopifnot(identical(sum(y), s), identical(y * 2, x * 2),
+          identical(z, y))
+## failed in R 4.6.2
 
 
 ## as(object, name) for informally defined class(object)[1L],
