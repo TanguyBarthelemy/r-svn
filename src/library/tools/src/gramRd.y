@@ -1470,19 +1470,21 @@ static void yyerror(const char *s)
 			 s1 + sizeof yyunexpected - 1, CHAR(STRING_ELT(yylval, 0)));
 	}
     	if (expecting) {
+	    size_t len = strlen(ParseErrorMsg);
  	    translated = FALSE;
     	    for (i = 0; yytname_translations[i]; i += 2) {
     	    	if (!strcmp(expecting + sizeof yyexpecting - 1, yytname_translations[i])) {
-    	    	    strcat(ParseErrorMsg, _(yyexpecting));
-    	    	    strcat(ParseErrorMsg, i/2 < YYENGLISH ? _(yytname_translations[i+1])
-    	    	                    : yytname_translations[i+1]);
+    	    	    snprintf(ParseErrorMsg + len, PARSE_ERROR_SIZE - len, "%s%s",
+			     _(yyexpecting),
+			     i/2 < YYENGLISH ? _(yytname_translations[i+1])
+			     : yytname_translations[i+1]);
     	    	    translated = TRUE;
 		    break;
 		}
 	    }
 	    if (!translated) {
-	    	strcat(ParseErrorMsg, _(yyexpecting));
-	    	strcat(ParseErrorMsg, expecting + sizeof yyexpecting - 1);
+	    	snprintf(ParseErrorMsg + len, PARSE_ERROR_SIZE - len, "%s%s",
+			 _(yyexpecting), expecting + sizeof yyexpecting - 1);
 	    }
 	}
     } else if (!strncmp(s, yyunknown, sizeof yyunknown-1)) {
@@ -1493,7 +1495,7 @@ static void yyerror(const char *s)
     }
     filename = findVar(install("filename"), SrcFile);
     if (isString(filename) && LENGTH(filename))
-    	strncpy(ParseErrorFilename, CHAR(STRING_ELT(filename, 0)), PARSE_ERROR_SIZE - 1);
+    	snprintf(ParseErrorFilename, PARSE_ERROR_SIZE, "%s", CHAR(STRING_ELT(filename, 0)));
     else
         ParseErrorFilename[0] = '\0';
     if (wCalls) {
@@ -1518,11 +1520,8 @@ static void yyerror(const char *s)
 	if (nc >= nstext - 1) {             \
 	    char *old = stext;              \
 	    nstext *= 2;		    \
-	    stext = malloc(nstext);         \
-	    if(!stext) error(_("unable to allocate buffer for long string at line %d"), parseState.xxlineno);\
+	    stext = R_alloc(nstext, 1);     \
 	    memmove(stext, old, nc);        \
-	    if(st1) free(st1);		    \
-	    st1 = stext;		    \
 	    bp = stext+nc; }		    \
 	*bp++ = ((char) c);		    \
 } while(0)
@@ -1620,7 +1619,7 @@ static int token(void)
 static int mkText(int c)
 {
     char st0[INITBUFSIZE];
-    char *st1 = NULL;
+    const void *vmax = vmaxget();
     unsigned int nstext = INITBUFSIZE;
     char *stext = st0, *bp = st0, lookahead;
     
@@ -1652,14 +1651,14 @@ static int mkText(int c)
 stop:
     if (c != '\n') xxungetc(c); /* newline causes a break, but we keep it */
     PRESERVE_SV(yylval = mkString2(stext, bp - stext));
-    if(st1) free(st1);
+    vmaxset(vmax);
     return TEXT;
 }
 
 static int mkComment(int c)
 {
     char st0[INITBUFSIZE];
-    char *st1 = NULL;
+    const void *vmax = vmaxget();
     unsigned int nstext = INITBUFSIZE;
     char *stext = st0, *bp = st0;
     
@@ -1669,7 +1668,7 @@ static int mkComment(int c)
     xxungetc(c);
     
     PRESERVE_SV(yylval = mkString2(stext, bp - stext));
-    if(st1) free(st1);
+    vmaxset(vmax);
     return COMMENT;
 }
 
@@ -1701,7 +1700,7 @@ static int closingRawStringDelim(int c)
 static int mkCode(int c)
 {
     char st0[INITBUFSIZE];
-    char *st1 = NULL;
+    const void *vmax = vmaxget();
     unsigned int nstext = INITBUFSIZE;
     char *stext = st0, *bp = st0;
     
@@ -1828,14 +1827,14 @@ static int mkCode(int c)
     }
     if (c != '\n') xxungetc(c);
     PRESERVE_SV(yylval = mkString2(stext, bp - stext));
-    if(st1) free(st1);
+    vmaxset(vmax);
     return RCODE; 
 }
 
 static int mkMarkup(int c)
 {
     char st0[INITBUFSIZE];
-    char *st1 = NULL;
+    const void *vmax = vmaxget();
     unsigned int nstext = INITBUFSIZE;
     char *stext = st0, *bp = st0;
     int retval = 0, attempt = 0;
@@ -1868,7 +1867,7 @@ static int mkMarkup(int c)
         }
     }
     PRESERVE_SV(yylval = mkString2(stext, bp - stext - 1));
-    if(st1) free(st1);
+    vmaxset(vmax);
     xxungetc(c);
     return retval;
 }
@@ -1876,7 +1875,7 @@ static int mkMarkup(int c)
 static int mkIfdef(int c)
 {
     char st0[INITBUFSIZE];
-    char *st1 = NULL;
+    const void *vmax = vmaxget();
     unsigned int nstext = INITBUFSIZE;
     char *stext = st0, *bp = st0;
     int retval;
@@ -1913,14 +1912,14 @@ static int mkIfdef(int c)
 	}
 	break;
     }
-    if(st1) free(st1);
+    vmaxset(vmax);
     return retval;
 }
 
 static int mkVerb(int c)
 {
     char st0[INITBUFSIZE];
-    char *st1 = NULL;
+    const void *vmax = vmaxget();
     unsigned int nstext = INITBUFSIZE;
     char *stext = st0, *bp = st0;
     
@@ -1953,7 +1952,7 @@ static int mkVerb(int c)
     };
     if (c != '\n') xxungetc(c);
     PRESERVE_SV(yylval = mkString2(stext, bp - stext));
-    if(st1) free(st1);
+    vmaxset(vmax);
     return VERB;  
 }
 

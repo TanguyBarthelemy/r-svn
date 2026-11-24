@@ -420,6 +420,87 @@ stopifnot(identical(unserialize(serialize(x, NULL)), x))
 ## returned a dotted pair whose names() crashed R in R <= 4.6.2
 
 
+## byte-compiled complex assignment to a missing argument -- PR#19358
+local({
+    `set<-` <- function(x, value) c(x, value)
+    f <- compiler::cmpfun(function(x) { set(x) <- 1; x })
+    g <- compiler::cmpfun(function(x) { x[1] <- 1; x })
+    stopifnot(inherits(tryCid(f()), "missingArgError"),
+              inherits(tryCid(g()), "missingArgError"),
+              identical(f(0), c(0, 1)), identical(g(0), 1))
+})
+## passed the empty symbol to the replacement function in R <= 4.6.2
+
+
+## kmeans() with a 'trace' not of length one, which the Hartigan-Wong code
+## reads and writes as a scalar; the other algorithms do not use 'trace'
+local({
+    x <- c(1, 2, 10, 11); cen <- c(1, 10)
+    lisE <- lapply(list(NULL, logical(), c(FALSE, FALSE)),
+                   function(tr) tryCid(kmeans(x, cen, trace = tr)))
+    stopifnot(vapply(lisE, inherits, NA, what = "error"))
+    stopifnot(identical(
+        vapply(lisE, conditionMessage, ""),
+        rep(sprintf(gettext("invalid value of %s", domain = "R-stats"), "'trace'"), 3)))
+    stopifnot(identical(kmeans(x, cen, algorithm = "Lloyd", trace = NULL)$size,
+                        c(2L, 2L)))
+})
+## segfaulted in R <= 4.6.2 builds not inlining DATAPTR(), otherwise gave a misleading error
+
+
+## parse_Rd() reporting a syntax error at a long token
+local({
+    txt <- c("\\name{x}",
+             paste0("\\description{\\link[{x}", strrep("a", 300L), "]{y}}"))
+    assertWarnV(tools::parse_Rd(textConnection(txt)))
+})
+## overflowed a stack buffer, typically crashing R, in R <= 4.6.2
+
+
+## unserialize() of a corrupt compact integer sequence state -- PR#19354
+s <- serialize(1:10, NULL, xdr = TRUE)
+i <- grepRaw(as.raw(c(0,0,0,0x0e, 0,0,0,3, 0x40,0x24)), s, fixed = TRUE)
+stopifnot(length(i) == 1L)
+setState <- function(st) # replace the REALSXP state c(10, 1, 1)
+    c(s[seq_len(i + 3L)], writeBin(length(st), raw(), endian = "big"),
+      writeBin(as.double(st), raw(), endian = "big"), s[-seq_len(i + 31L)])
+stopifnot(identical(unserialize(setState(c(10, 1, 1))), 1:10),
+          identical(unserialize(setState(c(5, 3, -1))), 3:-1))
+for (st in list(c(-10, 1, 1), 10, c(10, 1), c(10, 1, 2), c(NaN, 1, 1),
+                c(5, NA, 1), c(1e300, 1, 1), c(10, .Machine$integer.max, 1)))
+    assertErrV(unserialize(setState(st)))
+## gave negative lengths, integer overflow or out-of-bounds reads in R <= 4.6.2
+
+
+## return() in a top-level loop compiled by the JIT -- PR#19359
+local({
+    oJIT <- compiler::enableJIT(3)
+    on.exit(compiler::enableJIT(oJIT))
+    r <- eval(quote({ for (i in 1:3) if (i == 2) return("x"); "fell through" }),
+              globalenv())
+    stopifnot(identical(r, "x"))
+})
+## acted like break (giving "fell through") in R <= 4.6.2
+
+
+## parse_Rd() must free a grown token buffer when lexing the token fails
+local({
+    txt <- paste0("\\", strrep("a", 10001L))
+    for (fragment in c(FALSE, TRUE))
+        assertErrV(tools::parse_Rd(textConnection(txt), fragment = fragment))
+    long <- strrep("a", 5000L)
+    rd <- tools::parse_Rd(textConnection(c(
+        "\\name{x}", paste0("\\alias{", long, "}"), paste0("\\title{", long, "}"),
+        paste0("\\examples{", long, "}"), paste0("% ", long))))
+    tags <- vapply(rd, attr, "", "Rd_tag")
+    stopifnot(identical(unlist(rd[tags == "\\alias"]), long),
+              identical(unlist(rd[tags == "\\title"]), long),
+              identical(unlist(rd[tags == "\\examples"]), long),
+              identical(unlist(rd[tags == "COMMENT"]), paste("%", long)))
+})
+## leaked the token buffer in R <= 4.6.2 (visible under LSan)
+
+
 
 ## keep at end
 rbind(last =  proc.time() - .pt,
