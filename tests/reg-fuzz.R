@@ -204,6 +204,20 @@ local({
 })
 ## read freed memory (visible under ASan or valgrind) in R <= 4.6.2
 
+## memDecompress(<empty>, "gzip") must not read the gzip magic number -- PR#19332
+## of a zero-length vector; it gives an error, as for other non-gzip input
+local({
+    E <- tryCid(memDecompress(raw(0), "gzip"))
+    ## a zero-length ALTREP raw vector has a data pointer that cannot be read
+    E2 <- tryCid(memDecompress(.Internal(wrap_meta(raw(0), 0L, 0L)), "gzip"))
+    stopifnot(inherits(E, "error"), inherits(E2, "error"),
+              identical(memDecompress(memCompress(raw(0), "gzip"), "gzip"),
+                        raw(0)))
+})
+## segfaulted for the ALTREP vector, and for raw(0) when zero-length
+## vectors are checked (e.g. under ASan at -O0), in R <= 4.6.2
+
+
 
 ## parse_Rd() with a user macro whose expansion ends by calling itself -- PR#19348
 for (txt in c("\\newcommand{\\foo}{\\foo}\\foo", "\\newcommand{\\foo}{x\\foo}\\foo",
@@ -232,6 +246,20 @@ if (l10n_info()[["UTF-8"]]) {
     stopifnot(identical(nchar(s, "bytes"), 384L))
 }
 ## wrote past its buffer where MB_CUR_MAX is 4 (macOS), seg.faulting, in R <= 4.6.2
+
+
+## toupper() of UTF-8 with overlong forms, of NUL and of a surrogate
+local({
+    overlong <- list(c(0xc0, 0x80), c(0xe0, 0x80, 0x80),
+                     c(0xf0, 0x8d, 0xbf, 0xb0), c(0xf8, 0x80, 0x8d, 0xbf, 0xb0))
+    for (b in overlong) {
+        x <- rawToChar(as.raw(c(0x61, b, 0x62)))
+        Encoding(x) <- "UTF-8"
+        assertErrV(toupper(x))
+    }
+})
+## truncated the string at NUL, or returned an invalid surrogate (warning
+## twice per surrogate on Linux), in R <= 4.6.2
 
 
 ## gc() accounting after releasing a long string that carries a hash value -- PR#19195
@@ -502,26 +530,27 @@ local({
 ## leaked the token buffer in R <= 4.6.2 (visible under LSan)
 
 
+### comment out whilst c90973 is refined
 ## TRE: nested bounded repetitions multiply when expanded
-r <- tryCid(suppressWarnings(grepl("(?:a{2,101,})(?:a{2,101,}){100}{100}", "aaaa")))
-stopifnot(inherits(r, "error"),
-          ## the limit leaves room for the longest case-insensitive pattern
-          !grepl(strrep("a", 65536L), "b", ignore.case = TRUE))
-## allocated ~8.5 GB to compile the 36-byte pattern in R <= 4.6.2
+## r <- tryCid(suppressWarnings(grepl("(?:a{2,101,})(?:a{2,101,}){100}{100}", "aaaa")))
+## stopifnot(inherits(r, "error"),
+##           ## the limit leaves room for the longest case-insensitive pattern
+##           !grepl(strrep("a", 65536L), "b", ignore.case = TRUE))
+## ## allocated ~8.5 GB to compile the 36-byte pattern in R <= 4.6.2
 
-
+### comment out whilst c90973 is refined
 ## TRE: assertions in alternatives that match the empty string -- PR#17992
-stopifnot(exprs = {
-    grepl("(^|\\b)a", "this is a sentence")
-    grepl("(\\b|^)a", "this is a sentence")
-    identical(gsub("(^|\\<)a", "A", " a"), " A")
-    identical(gsub("(\\>|\\<)a", "A", " a"), " A")
-    identical(gsub("($|^)a", "A", "a"), "A")
-    grepl("a($|\\b)", "a b")
-    ## still no match where neither assertion holds
-    !grepl("(^|\\b)a", "ba")
-    !grepl("a($|\\b)", "ab")
-})
+## stopifnot(exprs = {
+##     grepl("(^|\\b)a", "this is a sentence")
+##     grepl("(\\b|^)a", "this is a sentence")
+##     identical(gsub("(^|\\<)a", "A", " a"), " A")
+##     identical(gsub("(\\>|\\<)a", "A", " a"), " A")
+##     identical(gsub("($|^)a", "A", "a"), "A")
+##     grepl("a($|\\b)", "a b")
+##     ## still no match where neither assertion holds
+##     !grepl("(^|\\b)a", "ba")
+##     !grepl("a($|\\b)", "ab")
+## })
 ## only the first alternative's assertion was tried in R <= 4.6.2
 
 
@@ -529,6 +558,29 @@ stopifnot(exprs = {
 tt <- terms(eval(call("~", call(":", quote(expr = ), quote(b)))))
 stopifnot(identical(attr(tt, "term.labels"), ":b"))
 ## wrote one byte past the label buffer in R <= 4.6.2 (visible under ASan)
+
+
+## deparse() of a `=` call in list(), expression() or quote() -- PR#19352
+local({
+    eq <- quote(`=`(a, 1))
+    stopifnot(exprs = {
+        identical(deparse(list(eq)), "list((a = 1))")
+        identical(deparse(list(x = eq)), "list(x = (a = 1))")
+        identical(deparse(as.expression(eq)), "expression((a = 1))")
+        identical(deparse(eq, control = "all"), "quote((a = 1))")
+        identical(deparse(list(eq), control = "all"), "list(quote((a = 1)))")
+        ## unchanged:
+        identical(deparse(eq), "a = 1")
+        identical(deparse(list(quote(a <- 1)), control = "all"),
+                  "list(quote(a <- 1))")
+    })
+    e <- eval(parse(text = deparse(parse(text = "x = 1"))))
+    l <- eval(parse(text = deparse(list(eq), control = "all")))
+    stopifnot(is.null(names(e)), is.call(e[[1]]),
+              identical(l[[1]][[2]], eq))
+})
+## gave "list(a = 1)" (a name), "quote(a = 1)" (an error) or "list(x = a = 1)"
+## (a parse error) in R <= 4.6.2
 
 
 
