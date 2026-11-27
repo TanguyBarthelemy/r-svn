@@ -8,18 +8,15 @@
 \section{\Rlogo Changes in R-devel}{
   \subsection{Significant User-Visible Changes}{
     \itemize{
-      \item \code{read.dcf()} and \code{write.dcf()} now treat \abbr{DCF}
-      files (such as package \file{DESCRIPTION} and repository
-      \file{PACKAGES} files) as \abbr{UTF-8}, as required by the Debian
-      control file format.  \code{read.dcf()} returns values in
-      \abbr{UTF-8} and \code{write.dcf()} always writes \abbr{UTF-8}
-      regardless of the session locale; bytes which are not valid
-      \abbr{UTF-8} are preserved by escaping them as \samp{<xx>} rather
-      than being re-encoded via a \samp{Encoding} field.  As a
-      consequence, the \code{useBytes} argument of \code{write.dcf()} is
-      ignored, and non-\abbr{UTF-8} \file{DESCRIPTION} files (e.g. those
-      declaring \samp{Encoding: latin1}) are no longer re-encoded on
-      reading.
+      \item \acronym{DCF} files such as package \file{DESCRIPTION} and
+      repository \file{PACKAGES} files are now treated as \abbr{UTF-8},
+      as required by the Debian control file format.  \code{read.dcf()}
+      and \code{write.dcf()} substitute bytes which are not valid
+      \abbr{UTF-8} by hex codes (\samp{<xx>}).  The \code{useBytes}
+      argument of \code{write.dcf()} is ignored.  An \samp{Encoding}
+      field in the \file{DESCRIPTION} file is no longer used to
+      re-encode the other fields when installing the package.
+      %(\code{packageDescription()} currently still re-encodes.)
 
       \item Fixing \code{rbinom()}, see \PR{19049} below, to reproduce
       old results needs \code{RNGkind()} to get a new \code{binom.kind}
@@ -236,6 +233,15 @@
       they are effectively unused.\cr
       \cr
       For details, see \code{deprecated?methods}.
+
+      \item Passing a name (rather than a character string) as
+      \code{component} to \code{model.extract()}, as in
+      \code{model.extract(mf, weights)}, is deprecated.  The warning
+      recommends \code{model.response()}, \code{model.weights()} or
+      \code{model.offset()} for those three components;
+      \code{model.extract(mf, "weights")} now also uses
+      \code{model.weights()}.  As suggested in r-dev-day issue #167 and
+      reported as \PR{19366} with analysis and patch by \I{Ashish Tiwari}.
     }
   }
 
@@ -596,6 +602,20 @@
       closing device having used many definitions, e.g., clipping paths,
       masks, fill patterns, or groups (\PR{19324}).
       Thanks to \I{Gilles Colling} and \I{Ivan Krylov}.
+
+      \item Keyboard handlers for \code{getGraphicsEvent()} on the X11
+      on-screen devices now receive the documented key names in more
+      cases, and is more consistent with behaviour on \code{windows()}.
+      Specifically, \kbd{Delete}, \kbd{Home}, and the keypad navigation
+      keys now work as expected. The behaviour with Control key pressed
+      is also more correct, particularly when used with \kbd{Shift} or
+      with Caps Lock on. Thanks to report and patches in \PR{19081} by
+      \I{Trevor Davis}.
+
+      \item Hexadecimal constants of subnormal numbers such as
+      \code{c(0x1p-1024, 0x1p-1074)} are correctly parsed now (instead of
+      \dQuote{underflowing} to \code{0}). Thanks to \I{Kevin Ushey}'s
+      report and patch in \PR{19342}.
     }
   }
 }
@@ -936,7 +956,7 @@
 
       \item \code{read.dcf()} now recognizes lines starting with
       \samp{#} as comment lines.  By \I{Dirk Eddelbuettel}, \I{Laurent
-      Gatto} and \I{Hugo Gruson}.
+      Gatto} and \I{Hugo Gruson} (\PR{18903}).
 
       \item \code{tcltk::tclVersion()} now only optionally includes the
       \sQuote{patch level}, as Tcl full versions can be of the form
